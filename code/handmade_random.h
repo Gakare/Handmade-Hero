@@ -1,5 +1,9 @@
 #if !defined(HANDMADE_RANDOM_H)
-#include "types.h"
+#include "handmade.h"
+
+#define MinRanNum 163189
+#define MaxRanNum 999712143
+
 global_variable uint32 RandomNumberTable[] = {
     608989501, 170653629, 618415403, 242317801, 523403928, 913900066, 710495380,
     71975111,  116609752, 813241774, 901386069, 171208318, 732822144, 717924374,
@@ -588,6 +592,50 @@ global_variable uint32 RandomNumberTable[] = {
     917933640, 794622658, 311643741, 94767263,  951384715, 613462463, 668652217,
     665347569,
 };
+
+struct random_series {
+    uint32 Index;
+};
+
+inline random_series RandomSeed(uint32 Value) {
+    random_series Series;
+    Series.Index = (Value % ArrayCount(RandomNumberTable));
+    return (Series);
+}
+
+inline uint32 NextRandomUInt32(random_series *Series) {
+    uint32 Result = RandomNumberTable[Series->Index++];
+    if (Series->Index >= ArrayCount(RandomNumberTable)) {
+        Series->Index = 0;
+    }
+    return (Result);
+}
+
+inline uint32 RandomChoice(random_series *Series, uint32 ChoiceCount) {
+    uint32 Result = (NextRandomUInt32(Series) % ChoiceCount);
+    return (Result);
+}
+
+inline real32 RandomUnilateral(random_series *Series) {
+    real32 Divisor = 1.0f / (real32)MaxRanNum;
+    real32 Result = Divisor * (real32)NextRandomUInt32(Series);
+    return (Result);
+}
+
+inline real32 RandomBilateral(random_series *Series) {
+    real32 Result = 2.0f * RandomUnilateral(Series) - 1.0f;
+    return (Result);
+}
+
+inline real32 RandomBetween(random_series *Series, real32 Min, real32 Max) {
+    real32 Result = Lerp(Min, RandomUnilateral(Series), Max);
+    return (Result);
+}
+
+inline int32 RandomBetween(random_series *Series, int32 Min, int32 Max) {
+    int32 Result = Min + (NextRandomUInt32(Series) % ((Max + 1) - Min));
+    return (Result);
+}
 
 #define HANDMADE_RANDOM_H
 #endif

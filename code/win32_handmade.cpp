@@ -1,4 +1,3 @@
-// clang-format off
 #include "handmade.h"
 #include "win32_handmade.h"
 
@@ -12,7 +11,6 @@
 #include <winuser.h>
 #include <Xinput.h>
 #include <dsound.h>
-// clang-format on
 
 #define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE *pState)
 typedef X_INPUT_GET_STATE(x_input_get_state);
@@ -929,12 +927,15 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 uint64 LastCycleCount = __rdtsc();
                 while (GlobalRunning) {
                     NewInput->dTForFrame = TargetSecondsPerFrame;
+                    NewInput->ExecutableReloaded = false;
+
                     FILETIME NewDLLWriteTime =
                         Win32GetLastWriteTime(SourceGameCodeDLLFullPath);
                     if (CompareFileTime(&NewDLLWriteTime, &Game.DLLLastWriteTime) != 0) {
                         Win32UnloadGameCode(&Game);
                         Game = Win32LoadGameCode(SourceGameCodeDLLFullPath,
                                                  TempGameCodeDLLFullPath);
+                        NewInput->ExecutableReloaded = true;
                     }
 
                     game_controller_input *OldKeyboardController =
@@ -1201,7 +1202,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                                 DWORD SleepMS =
                                     (DWORD)(1000.0f * (TargetSecondsPerFrame -
                                                        SecondsElapsedForFrame));
-                                // NOTE: This is what is causing my ms to not be
+                                // TODO: BUG: This is what is causing my ms to not be
                                 // a stable rate
                                 if (SleepMS > 0) {
                                     Sleep(SleepMS);

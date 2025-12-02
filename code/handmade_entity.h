@@ -1,8 +1,7 @@
 #if !defined(HANDMADE_ENTITY_H)
-#include "handmade_sim_region.h"
-#include "types.h"
+#include "handmade.h"
 
-#define InvalidP V2(100000.0f, 100000.0f)
+#define InvalidP V3(100000.0f, 100000.0f, 100000.0f)
 
 inline bool32 IsSet(sim_entity *Entity, uint32 Flag) {
     bool32 Result = Entity->Flags & Flag;
@@ -10,19 +9,38 @@ inline bool32 IsSet(sim_entity *Entity, uint32 Flag) {
     return (Result);
 }
 
-inline void ClearFlag(sim_entity *Entity, uint32 Flag) { Entity->Flags &= ~Flag; }
+inline void ClearFlags(sim_entity *Entity, uint32 Flag) { Entity->Flags &= ~Flag; }
 
-inline void AddFlag(sim_entity *Entity, uint32 Flag) { Entity->Flags |= Flag; }
+inline void AddFlags(sim_entity *Entity, uint32 Flag) { Entity->Flags |= Flag; }
 
 inline void MakeEntityNonSpatial(sim_entity *Entity) {
-    AddFlag(Entity, EntityFlag_NonSpatial);
+    AddFlags(Entity, EntityFlag_NonSpatial);
     Entity->P = InvalidP;
 }
 
-inline void MakeEntitySpatial(sim_entity *Entity, v2 P, v2 dP) {
-    ClearFlag(Entity, EntityFlag_NonSpatial);
+inline void MakeEntitySpatial(sim_entity *Entity, v3 P, v3 dP) {
+    ClearFlags(Entity, EntityFlag_NonSpatial);
     Entity->P = P;
     Entity->dP = dP;
+}
+
+inline v3 GetEntityGroundPoint(sim_entity *Entity, v3 ForEntityP) {
+    v3 Result = ForEntityP;
+    return (Result);
+}
+
+inline v3 GetEntityGroundPoint(sim_entity *Entity) {
+    v3 Result = GetEntityGroundPoint(Entity, Entity->P);
+    return (Result);
+}
+
+inline real32 GetStairGround(sim_entity *Entity, v3 AtGroundPoint) {
+    Assert(Entity->Type == EntityType_Stairwell);
+
+    rectangle2 RegionRect = RectCenterDim(Entity->P.xy, Entity->WalkalbleDim);
+    v2 Bary = Clamp01(GetBaryCentric(RegionRect, AtGroundPoint.xy));
+    real32 Result = Entity->P.z + Bary.y * Entity->WalkableHeight;
+    return (Result);
 }
 
 #define HANDMADE_ENTITY_H

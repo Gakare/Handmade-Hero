@@ -1,4 +1,3 @@
-#include "handmade_entity.h"
 #include "handmade_sim_region.cpp"
 
 inline move_spec DefaultMoveSpec(void) {
@@ -10,5 +9,3 @@ inline move_spec DefaultMoveSpec(void) {
 
     return (Result);
 }
-
-internal void pluh();

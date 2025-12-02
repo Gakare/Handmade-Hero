@@ -1,3 +1,4 @@
 IndentWidth: 4
 IndentCaseLabels: true
 ColumnLimit: 90
+SortIncludes: false

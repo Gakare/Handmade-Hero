@@ -38,6 +38,9 @@ extern "C" {
 #endif
 
 #include "types.h"
+#include <float.h>
+
+#define Real32Maximum FLT_MAX
 
 typedef struct game_button_state {
     int HalfTransitionCount;
@@ -76,6 +79,7 @@ typedef struct game_input {
     game_button_state MouseButtons[5];
     int32 MouseX, MouseY, MouseZ;
 
+    bool32 ExecutableReloaded;
     real32 dTForFrame;
 
     game_controller_input Controllers[5];
@@ -120,7 +124,9 @@ typedef struct game_memory {
 
 // Controller/Keyboard input, bitmap buffer to use,
 // sound buffer to use
+#define BITMAP_BYTES_PER_PIXEL 4
 typedef struct game_offscreen_buffer {
+    // NOTE: Pixels are always 32-bits wide
     void *Memory;
     int Width;
     int Height;

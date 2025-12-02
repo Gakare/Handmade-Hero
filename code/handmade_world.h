@@ -2,18 +2,13 @@
 #include "handmade_math.h"
 #include "types.h"
 
-struct world_difference {
-    v2 dXY;
-    real32 dZ;
-};
-
 struct world_position {
     int32 ChunkX;
     int32 ChunkY;
     int32 ChunkZ;
 
     // NOTE: These are the offsets from the chunk center
-    v2 Offset_;
+    v3 Offset_;
 };
 
 struct world_entity_block {
@@ -34,8 +29,7 @@ struct world_chunk {
 };
 
 struct world {
-    real32 TileSideInMeters;
-    real32 ChunkSideInMeters;
+    v3 ChunkDimInMeters;
 
     world_entity_block *FirstFree;
 
