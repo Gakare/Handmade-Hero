@@ -3,6 +3,16 @@
 #include "math.h"
 #include "types.h"
 
+#if COMPILER_MSVC
+#define CompletePreviousWritesBeforeFutureWrites _WriteBarrier();
+inline uint32 AtomicCompareExchangeUInt32(uint32 volatile *Value, uint32 Expected, uint32 New) {
+    uint32 Result = _InterlockedCompareExchange((long *)Value, Expected, New);
+    return (Result);
+}
+#else
+// TODO: Need to define these on GCC/LLVM?
+#endif
+
 inline int32 SignOf(int32 Value) {
     int32 Result = (Value >= 0) ? 1 : -1;
     return Result;

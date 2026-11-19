@@ -1,6 +1,7 @@
 #include "handmade.h"
 #include "win32_handmade.h"
 
+/* Included libraries */
 #include <fileapi.h>
 #include <math.h>
 
@@ -16,8 +17,7 @@
 typedef X_INPUT_GET_STATE(x_input_get_state);
 X_INPUT_GET_STATE(XInputGetStateStub) { return (ERROR_DEVICE_NOT_CONNECTED); }
 
-#define X_INPUT_SET_STATE(name)                                                          \
-    DWORD WINAPI name(DWORD dwUserIndex, XINPUT_VIBRATION *pVibration)
+#define X_INPUT_SET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_VIBRATION *pVibration)
 typedef X_INPUT_SET_STATE(x_input_set_state);
 X_INPUT_SET_STATE(XInputSetStateStub) { return (ERROR_DEVICE_NOT_CONNECTED); }
 
@@ -329,14 +329,16 @@ internal void Win32ResizeDIBSection(win32_offscreen_buffer *Buffer, int Width,
 
     Buffer->Info.bmiHeader.biSize = sizeof(Buffer->Info.bmiHeader);
     Buffer->Info.bmiHeader.biWidth = Buffer->Width;
-    Buffer->Info.bmiHeader.biHeight = -Buffer->Height; // BitMap is top-down
+    Buffer->Info.bmiHeader.biHeight = Buffer->Height;
     Buffer->Info.bmiHeader.biPlanes = 1;
     Buffer->Info.bmiHeader.biBitCount = 32;
     Buffer->Info.bmiHeader.biCompression = BI_RGB;
 
-    int BitMapMemorySize = (Buffer->Width * Buffer->Height) * BytesPerPixel;
+    Buffer->Pitch = Align16(Width * BytesPerPixel);
+    int BitMapMemorySize = (Buffer->Pitch * Buffer->Height);
     Buffer->Memory = VirtualAlloc(0, BitMapMemorySize, MEM_COMMIT, PAGE_READWRITE);
-    Buffer->Pitch = Width * BytesPerPixel;
+
+    // TODO: Probably clear this to black
 }
 
 internal void Win32DisplayBufferInWindow(HDC DeviceContext, int WindowWidth,
@@ -347,6 +349,7 @@ internal void Win32DisplayBufferInWindow(HDC DeviceContext, int WindowWidth,
                       Buffer->Width, Buffer->Height, Buffer->Memory, &Buffer->Info,
                       DIB_RGB_COLORS, SRCCOPY);
     } else {
+#if 0 
         int OffsetX = 10;
         int OffsetY = 10;
 
@@ -356,6 +359,10 @@ internal void Win32DisplayBufferInWindow(HDC DeviceContext, int WindowWidth,
         PatBlt(DeviceContext, 0, 0, OffsetX, WindowHeight, BLACKNESS);
         PatBlt(DeviceContext, OffsetX + Buffer->Width, 0, WindowWidth, WindowHeight,
                BLACKNESS);
+#else
+        int OffsetX = 0;
+        int OffsetY = 0;
+#endif
 
         // Note: For prototyping, no stretching the pixels. Much prefer 1-to-1
         // pixels.
@@ -767,9 +774,160 @@ internal void Win32DebugSyncDisplay(win32_offscreen_buffer *BackBuffer, int Mark
 }
 #endif
 
+internal void HandleDebugCycleCounters(game_memory *Memory) {
+#if HANDMADE_INTERNAL
+    OutputDebugStringA("DEBUG CYCLE COUNTS:\n");
+    for (int CounterIndex = 0;
+         CounterIndex < ArrayCount(Memory->Counters);
+         ++CounterIndex) {
+        debug_cycle_counter *Counter = Memory->Counters + CounterIndex;
+        if (Counter->HitCount) {
+            char TextBuffer[256];
+            _snprintf_s(TextBuffer, sizeof(TextBuffer),
+                        "%d: %I64ucl %uh %I64ucy/h\n", CounterIndex, Counter->CycleCount,
+                        Counter->HitCount, Counter->CycleCount / (uint64)Counter->HitCount);
+            OutputDebugStringA(TextBuffer);
+            Counter->HitCount = 0;
+            Counter->CycleCount = 0;
+        }
+    }
+#endif
+}
+
+struct platform_work_queue_entry {
+    platform_work_queue_callback *Callback;
+    void *Data;
+};
+
+struct platform_work_queue {
+    uint32 volatile CompletionGoal;
+    uint32 volatile CompletionCount;
+
+    uint32 volatile NextEntryToWrite;
+    uint32 volatile NextEntryToRead;
+    HANDLE SemaphoreHandle;
+
+    platform_work_queue_entry Entries[256];
+};
+
+internal void Win32AddEntry(platform_work_queue *Queue, platform_work_queue_callback *Callback,
+                            void *Data) {
+    uint32 NewNextEntryToWrite = (Queue->NextEntryToWrite + 1) % ArrayCount(Queue->Entries);
+    Assert(NewNextEntryToWrite != Queue->NextEntryToRead);
+    platform_work_queue_entry *Entry = Queue->Entries + Queue->NextEntryToWrite;
+    Entry->Callback = Callback;
+    Entry->Data = Data;
+    ++Queue->CompletionGoal;
+    _WriteBarrier();
+    Queue->NextEntryToWrite = NewNextEntryToWrite;
+    ReleaseSemaphore(Queue->SemaphoreHandle, 1, 0);
+}
+
+internal bool32 Win32DoNextWorkQueueEntry(platform_work_queue *Queue) {
+    bool32 WeShouldSleep = false;
+
+    uint32 OriginalNextEntryToRead = Queue->NextEntryToRead;
+    uint32 NewNextEntryToRead = (OriginalNextEntryToRead + 1) % ArrayCount(Queue->Entries);
+    if (OriginalNextEntryToRead != Queue->NextEntryToWrite) {
+        uint32 Index = InterlockedCompareExchange((LONG volatile *)&Queue->NextEntryToRead,
+                                                  NewNextEntryToRead,
+                                                  OriginalNextEntryToRead);
+
+        if (Index == OriginalNextEntryToRead) {
+            platform_work_queue_entry Entry = Queue->Entries[Index];
+            Entry.Callback(Queue, Entry.Data);
+            InterlockedIncrement((LONG volatile *)&Queue->CompletionCount);
+        }
+    } else {
+        WeShouldSleep = true;
+    }
+
+    return (WeShouldSleep);
+}
+
+internal void
+Win32CompleteAllWork(platform_work_queue *Queue) {
+    while (Queue->CompletionGoal != Queue->CompletionCount) {
+        Win32DoNextWorkQueueEntry(Queue);
+    }
+
+    Queue->CompletionGoal = 0;
+    Queue->CompletionCount = 0;
+}
+
+DWORD WINAPI ThreadProc(LPVOID lpParameter) {
+    platform_work_queue *Queue = (platform_work_queue *)lpParameter;
+
+    while (1) {
+        if (Win32DoNextWorkQueueEntry(Queue)) {
+            WaitForSingleObjectEx(Queue->SemaphoreHandle, INFINITE, false);
+        }
+    }
+
+    return (0);
+}
+
+
+internal PLATFORM_WORK_QUEUE_CALLBACK(DoWorkerWork) {
+    char Buffer[256];
+    wsprintf(Buffer, "Thread %u: %s\n", GetCurrentThreadId(), (char *)Data);
+    OutputDebugStringA(Buffer);
+}
+
+internal void Win32MakeQueue(platform_work_queue *Queue, uint32 ThreadCount) {
+    Queue->CompletionGoal = 0;
+    Queue->CompletionCount = 0;
+    Queue->NextEntryToWrite = 0;
+    Queue->NextEntryToRead = 0;
+
+    uint32 InitialCount = 0;
+    Queue->SemaphoreHandle = CreateSemaphoreEx(0,
+                                               InitialCount,
+                                               ThreadCount,
+                                               0, 0, SEMAPHORE_ALL_ACCESS);
+    for (uint32 ThreadIndex = 0; ThreadIndex < ThreadCount; ++ThreadIndex) {
+        DWORD ThreadID;
+        HANDLE ThreadHandle = CreateThread(0, 0, ThreadProc, Queue, 0, &ThreadID);
+        CloseHandle(ThreadHandle);
+    }
+}
+
 int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine,
                      int nShowCmd) {
+
     win32_state Win32State = {};
+
+    platform_work_queue HighPriorityQueue = {};
+    Win32MakeQueue(&HighPriorityQueue, 6);
+
+    platform_work_queue LowPriorityQueue = {};
+    Win32MakeQueue(&LowPriorityQueue, 2);
+
+#if 0
+    Win32AddEntry(&Queue, DoWorkerWork, "String A0");
+    Win32AddEntry(&Queue, DoWorkerWork, "String A1");
+    Win32AddEntry(&Queue, DoWorkerWork, "String A2");
+    Win32AddEntry(&Queue, DoWorkerWork, "String A3");
+    Win32AddEntry(&Queue, DoWorkerWork, "String A4");
+    Win32AddEntry(&Queue, DoWorkerWork, "String A5");
+    Win32AddEntry(&Queue, DoWorkerWork, "String A6");
+    Win32AddEntry(&Queue, DoWorkerWork, "String A7");
+    Win32AddEntry(&Queue, DoWorkerWork, "String A8");
+    Win32AddEntry(&Queue, DoWorkerWork, "String A9");
+
+    Win32AddEntry(&Queue, DoWorkerWork, "String B0");
+    Win32AddEntry(&Queue, DoWorkerWork, "String B1");
+    Win32AddEntry(&Queue, DoWorkerWork, "String B2");
+    Win32AddEntry(&Queue, DoWorkerWork, "String B3");
+    Win32AddEntry(&Queue, DoWorkerWork, "String B4");
+    Win32AddEntry(&Queue, DoWorkerWork, "String B5");
+    Win32AddEntry(&Queue, DoWorkerWork, "String B6");
+    Win32AddEntry(&Queue, DoWorkerWork, "String B7");
+    Win32AddEntry(&Queue, DoWorkerWork, "String B8");
+    Win32AddEntry(&Queue, DoWorkerWork, "String B9");
+
+    Win32CompleteAllWork(&Queue);
+#endif
 
     LARGE_INTEGER PerfCountFreqResult;
     QueryPerformanceFrequency(&PerfCountFreqResult);
@@ -795,7 +953,8 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 #endif
     WNDCLASSA WindowClass = {};
 
-    Win32ResizeDIBSection(&GlobalBackBuffer, 960, 540);
+    //Win32ResizeDIBSection(&GlobalBackBuffer, 960, 540);
+    Win32ResizeDIBSection(&GlobalBackBuffer, 1920, 1080);
 
     WindowClass.style = CS_HREDRAW | CS_VREDRAW;
     WindowClass.lpfnWndProc = Win32MainWindowCallBack;
@@ -811,14 +970,13 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             CW_USEDEFAULT, 0, 0, hInstance, 0);
         if (Window) {
             HDC RefreshDC = GetDC(Window);
-            int MonitorRefreshHz = 240; // This is my default monitor hz
+            int MonitorRefreshHz = 240; 
             int Win32RefreshRate = GetDeviceCaps(RefreshDC, VREFRESH);
             ReleaseDC(Window, RefreshDC);
             if (Win32RefreshRate > 1) {
                 MonitorRefreshHz = Win32RefreshRate;
             }
-            // NOTE: This is to get 30 fps from 240
-            int GameUpdateHz = (int)(MonitorRefreshHz / 8.0f);
+            real32 GameUpdateHz = (real32)MonitorRefreshHz; //(int)(MonitorRefreshHz / 2.0f);
             real32 TargetSecondsPerFrame = 1.0f / (real32)GameUpdateHz;
 
             win32_sound_output SoundOutput = {};
@@ -863,6 +1021,10 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             game_memory GameMemory = {};
             GameMemory.PermanentStorageSize = Megabytes(64);
             GameMemory.TransientStorageSize = Gigabytes(1);
+            GameMemory.HighPriorityQueue = &HighPriorityQueue;
+            GameMemory.LowPriorityQueue = &LowPriorityQueue;
+            GameMemory.PlatformAddEntry = Win32AddEntry;
+            GameMemory.PlatformCompleteAllWork = Win32CompleteAllWork;
             GameMemory.DEBUGPlatformFreeFileMemory = DEBUGPlatformFreeFileMemory;
             GameMemory.DEBUGPlatformReadEntireFile = DEBUGPlatformReadEntireFile;
             GameMemory.DEBUGPlatformWriteEntireFile = DEBUGPlatformWriteEntireFile;
@@ -950,6 +1112,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                         NewKeyboardController->Buttons[ButtonIndex].EndedDown =
                             OldKeyboardController->Buttons[ButtonIndex].EndedDown;
                     }
+
                     Win32ProcessPendingMessages(&Win32State, NewKeyboardController);
 
                     if (!GlobalPause) {
@@ -1082,6 +1245,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
                         if (Game.UpdateAndRender) {
                             Game.UpdateAndRender(Thread, &GameMemory, &Buffer, NewInput);
+                            HandleDebugCycleCounters(&GameMemory);
                         }
 
                         LARGE_INTEGER AudioWallClock = Win32GetWallClock();
@@ -1104,7 +1268,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                             DWORD ExpectedSoundBytesPerFrame =
                                 (int)((real32)(SoundOutput.SamplesPerSecond *
                                                SoundOutput.BytesPerSample)) /
-                                GameUpdateHz;
+                                (int)GameUpdateHz;
                             real32 SecondsLeftUntilFlip =
                                 TargetSecondsPerFrame - FromBeginToAudioSeconds;
 
@@ -1220,13 +1384,14 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
                         } else { // MISSED FRAME RATE
                         }
-                        win32_window_dimension Dimension =
-                            Win32GetWindowDimension(Window);
 
                         LARGE_INTEGER EndCounter = Win32GetWallClock();
                         real64 MSPerFrame =
                             1000.0f * Win32GetSecondsElapsed(LastCounter, EndCounter);
                         LastCounter = EndCounter;
+
+                        win32_window_dimension Dimension =
+                            Win32GetWindowDimension(Window);
                         // #if HANDMADE_INTERNAL
                         //  Win32DebugSyncDisplay(&GlobalBackBuffer,
                         //                        ArrayCount(DebugTimeMarkers),
@@ -1255,7 +1420,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                         game_input *Temp = NewInput;
                         NewInput = OldInput;
                         OldInput = Temp;
-#if 0
+#if 1
                         uint64 EndCycleCount = __rdtsc();
                         int64 CyclesElapsed = EndCycleCount - LastCycleCount;
                         LastCycleCount = EndCycleCount;

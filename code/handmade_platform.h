@@ -34,13 +34,43 @@ extern "C" {
 
 #if COMPILER_MSVC
 #include <intrin.h>
-#pragma intrinsic(_BitScanForward)
+#elif COMPILER_LLVM
+#include <x86intrin.h>
+#else
+#error SSE/NEON optimizations are not available for this compiler yet!!!
 #endif
 
 #include "types.h"
 #include <float.h>
 
 #define Real32Maximum FLT_MAX
+
+#if HANDMADE_SLOW
+#define Assert(Expression)                                                               \
+    if (!(Expression)) {                                                                 \
+        *(volatile int *)0 = 0;                                                          \
+    }
+#else
+#define Assert(Expression)
+#endif
+
+#define InvalidCodePath Assert(!"InvalidCodePath");
+#define InvalidDefaultCase                                                               \
+    default: {                                                                           \
+        InvalidCodePath;                                                                 \
+    } break
+
+#define Kilobytes(Value) ((Value) * 1024)
+#define Megabytes(Value) (Kilobytes(Value) * 1024)
+#define Gigabytes(Value) (Megabytes(Value) * 1024)
+#define Terabytes(Value) (Gigabytes(Value) * 1024)
+
+#define ArrayCount(Array) (sizeof(Array) / sizeof((Array)[0]))
+
+#define Minimum(A, B) ((A < B) ? (A) : (B))
+#define Maximum(A, B) ((A > B) ? (A) : (B))
+
+#define Align16(Value) ((Value + 15) & ~15)
 
 typedef struct game_button_state {
     int HalfTransitionCount;
@@ -85,11 +115,21 @@ typedef struct game_input {
     game_controller_input Controllers[5];
 } game_input;
 
+inline uint32 SafeTruncateUInt64(uint64 Value) {
+    Assert(Value <= 0xFFFFFFFF);
+    uint32 Result = (uint32)Value;
+    return (Result);
+}
+
 typedef struct thread_context {
     int Placeholder;
 } thread_context;
 
 #if HANDMADE_INTERNAL
+/* IMPORTANT:
+* These are NOT for doing anything in the shipping game - they are blocking and the
+* write doesn't protect against lost data!
+*/
 typedef struct debug_read_file_result {
     uint32 ContentsSize;
     void *Contents;
@@ -107,7 +147,43 @@ typedef DEBUG_PLATFORM_FREE_FILE_MEMORY(debug_platform_free_file_memory);
                 void *Memory)
 typedef DEBUG_PLATFORM_WRITE_ENTIRE_FILE(debug_platform_write_entire_file);
 
+enum {
+    /* 0 */ DebugCycleCounter_GameUpdateAndRender,
+    /* 1 */ DebugCycleCounter_RenderGroupToOutput,
+    /* 2 */ DebugCycleCounter_DrawRectangleSlowly,
+    /* 3 */ DebugCycleCounter_ProcessPixel,
+    /* 4 */ DebugCycleCounter_DrawRectangleQuickly,
+   DebugCycleCounter_Count,
+};
+typedef struct debug_cycle_counter {
+    uint64 CycleCount;
+    uint32 HitCount;
+} debug_cycle_counter;
+
+extern struct game_memory *DebugGlobalMemory;
+#if _MSC_VER
+#define BEGIN_TIMED_BLOCK(ID) uint64 StartCycleCount##ID = __rdtsc();
+#define END_TIMED_BLOCK(ID)  DebugGlobalMemory->Counters[DebugCycleCounter_##ID].CycleCount += __rdtsc() - StartCycleCount##ID;\
+                             ++DebugGlobalMemory->Counters[DebugCycleCounter_##ID].HitCount;
+// TODO: Clamp END_TIME_BLOCK_COUNTED so that if the calc is wrong, it won't overflow!
+#define END_TIMED_BLOCK_COUNTED(ID, Count)  DebugGlobalMemory->Counters[DebugCycleCounter_##ID].CycleCount += __rdtsc() - StartCycleCount##ID;\
+                             DebugGlobalMemory->Counters[DebugCycleCounter_##ID].HitCount += Count;
+
+#else
+#define BEGIN_TIMED_BLOCK(ID) 
+#define END_TIMED_BLOCK(ID)  
+#define END_TIMED_BLOCK_COUNTED(ID, Count)
 #endif
+
+#endif
+
+struct platform_work_queue;
+#define PLATFORM_WORK_QUEUE_CALLBACK(name) void name(platform_work_queue *Queue, void *Data)
+typedef PLATFORM_WORK_QUEUE_CALLBACK(platform_work_queue_callback);
+
+typedef void platform_add_entry(platform_work_queue *Queue, platform_work_queue_callback *Callback,
+                           void *Data);
+typedef void platform_complete_all_work(platform_work_queue *Queue);
 
 typedef struct game_memory {
     bool32 IsInitialized;
@@ -117,9 +193,19 @@ typedef struct game_memory {
     uint64 TransientStorageSize;
     void *TransientStorage; // Required to be cleared to zero at startup
 
+    platform_work_queue *HighPriorityQueue;
+    platform_work_queue *LowPriorityQueue;
+
+    platform_add_entry *PlatformAddEntry;
+    platform_complete_all_work *PlatformCompleteAllWork;
+
     debug_platform_read_entire_file *DEBUGPlatformReadEntireFile;
     debug_platform_free_file_memory *DEBUGPlatformFreeFileMemory;
     debug_platform_write_entire_file *DEBUGPlatformWriteEntireFile;
+
+#if HANDMADE_INTERNAL
+    debug_cycle_counter Counters[DebugCycleCounter_Count];
+#endif
 } game_memory;
 
 // Controller/Keyboard input, bitmap buffer to use,

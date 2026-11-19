@@ -1,13 +1,28 @@
 #if !defined(HANDMADE_H)
 
 /* TODO:
+    - Asset streaming
+
     - Rendering
-        - Lighting
         - Straighten out all coordinate systems!
             - Screen
             - World
             - Texture
-        - Optimization
+        - Particle systems
+        - Lighting
+        - Final Optimization
+
+    - Debugging
+        - Fonts
+        - Logging
+        - Diagramming
+        - (A LITTLE GUI, but a tiny bit) Switchers / sliders /etc.
+        - Draw tile chunks so we can verify that things are aligned / in the chunks
+
+    - Audio
+        - Sound effect triggers
+        - Ambient Sounds
+        - Music
 
     ARCHITECTURE EXPLORATION
     - Z!
@@ -23,21 +38,9 @@
         - Per-entity clocking
         - Sim region merging? For multiple players?
 
-    - Debugging
-        - Logging
-        - Diagramming
-        - (A LITTLE GUI, but a tiny bit) Switchers / sliders /etc.
-        - Draw tile chunks so we can verify that things are aligned / in the chunks
-
     - Metagame / save games?
         - Should we allow saved games? Just for "pausing"
         - Continuous save for crash recovery?
-
-    - Audio
-        - Sound effect triggers
-        - Ambient Sounds
-        - Music
-    - Asset streaming
 
     - Rudimentary world gen
         - Placement of background things
@@ -64,39 +67,9 @@
 #include "handmade_platform.h"
 #include "handmade_sim_region.h"
 #include "handmade_world.h"
+#include "handmade_render_group.h"
 
 #define Pi32 3.14159265359f
-
-#if HANDMADE_SLOW
-#define Assert(Expression)                                                               \
-    if (!(Expression)) {                                                                 \
-        *(volatile int *)0 = 0;                                                          \
-    }
-#else
-#define Assert(Expression)
-#endif
-
-#define InvalidCodePath Assert(!"InvalidCodePath");
-#define InvalidDefaultCase                                                               \
-    default: {                                                                           \
-        InvalidCodePath;                                                                 \
-    } break
-
-#define Kilobytes(Value) ((Value) * 1024)
-#define Megabytes(Value) (Kilobytes(Value) * 1024)
-#define Gigabytes(Value) (Megabytes(Value) * 1024)
-#define Terabytes(Value) (Gigabytes(Value) * 1024)
-
-#define ArrayCount(Array) (sizeof(Array) / sizeof((Array)[0]))
-
-#define Minimum(A, B) ((A < B) ? (A) : (B))
-#define Maximum(A, B) ((A > B) ? (A) : (B))
-
-inline uint32 SafeTruncateUInt64(uint64 Value) {
-    Assert(Value <= 0xFFFFFFFF);
-    uint32 Result = (uint32)Value;
-    return (Result);
-}
 
 inline game_controller_input *GetController(game_input *Input, int ControllerIndex) {
     Assert(ControllerIndex < ArrayCount(Input->Controllers));
@@ -124,19 +97,7 @@ internal void InitializeArena(memory_arena *Arena, memory_index Size, void *Base
     Arena->TempCount = 0;
 }
 
-struct loaded_bitmap {
-    int32 Width;
-    int32 Height;
-    int32 Pitch;
-    void *Memory;
-};
-
-struct environment_map {
-    loaded_bitmap LOD[4];
-};
-
 struct hero_bitmaps {
-    v2 Align;
     loaded_bitmap Head;
     loaded_bitmap Cape;
     loaded_bitmap Torso;
@@ -171,6 +132,70 @@ struct ground_buffer {
     loaded_bitmap Bitmap;
 };
 
+enum asset_state {
+    AssetState_Unloaded,
+    AssetState_Queued,
+    AssetState_Loaded,
+    AssetState_Locked,
+};
+
+struct asset_slot {
+    uint32 LockCount;
+    asset_state State;
+    loaded_bitmap *Bitmap;
+};
+
+enum game_asset_id {
+    GAI_Backdrop,
+    GAI_Shadow,
+    GAI_Sword,
+    GAI_Tree,
+    GAI_Stairwell,
+
+    GAI_Count,
+};
+
+struct asset_tag {
+    uint32 ID;
+    real32 Value;
+};
+
+struct asset_bitmap_info {
+    v2 AlignPercentage;
+    real32 WidthOverHeight;
+    int32 Width;
+    int32 Height;
+
+    uint32 FirstTagIndex;
+    uint32 OnePastLastTagIndex;
+};
+
+struct asset_group {
+    uint32 FirstTagIndex;
+    uint32 OnePastLastTagIndex;
+};
+
+struct game_assets {
+    struct transient_state *TranState;
+    memory_arena Arena;
+    debug_platform_read_entire_file *ReadEntireFile;
+    asset_slot Bitmaps[GAI_Count];
+
+    // NOTE: Array'd assets
+    loaded_bitmap Grass[2];
+    loaded_bitmap Ground[4];
+    loaded_bitmap Tuft[3];
+
+    // NOTE: Structured assets
+    hero_bitmaps HeroBitmaps[4];
+};
+
+inline loaded_bitmap *GetBitmap(game_assets *Assets, game_asset_id ID) {
+    loaded_bitmap *Result = Assets->Bitmaps[ID].Bitmap;
+
+    return (Result);
+}
+
 struct game_state {
     memory_arena WorldArena;
     world *World;
@@ -185,21 +210,6 @@ struct game_state {
 
     uint32 LowEntityCount;
     low_entity LowEntities[100000];
-
-    loaded_bitmap Grass[2];
-    loaded_bitmap Ground[4];
-    loaded_bitmap Tuft[3];
-
-    loaded_bitmap Backdrop;
-    hero_bitmaps HeroBitmaps[4];
-    loaded_bitmap Shadow;
-
-    loaded_bitmap Sword;
-    loaded_bitmap Tree;
-    loaded_bitmap Stairwell;
-
-    real32 MetersToPixels;
-    real32 PixelsToMeters;
 
     // TODO: Must be power of two rn
     pairwise_collision_rule *CollisionRuleHash[256];
@@ -216,29 +226,67 @@ struct game_state {
 
     real32 Time;
 
-    loaded_bitmap TestDiffuse;
+    loaded_bitmap TestDiffuse; // TODO: Re-fill this guy with gray.
     loaded_bitmap TestNormal;
+};
+
+struct task_with_memory {
+    bool32 BeingUsed;
+    memory_arena Arena;
+
+    temporary_memory MemoryFlush;
 };
 
 struct transient_state {
     bool32 IsInitialized;
     memory_arena TransientArena;
+
+    task_with_memory Tasks[4];
+
     uint32 GroundBufferCount;
     ground_buffer *GroundBuffers;
+    platform_work_queue *HighPriorityQueue;
+    platform_work_queue *LowPriorityQueue;
 
     uint32 EnvMapWidth;
     uint32 EnvMapHeight;
     // NOTE: 0 is bottom, 1 is middle, 2 is top
     environment_map EnvMaps[3];
+
+    game_assets Assets;
 };
 
-#define PushStruct(Arena, type) (type *)PushSize_(Arena, sizeof(type))
-#define PushArray(Arena, Count, type) (type *)PushSize_(Arena, (Count) * sizeof(type))
-#define PushSize(Arena, Size) PushSize_(Arena, Size)
-inline void *PushSize_(memory_arena *Arena, memory_index Size) {
+inline memory_index GetAlignmentOffset(memory_arena *Arena, memory_index Alignment) {
+    memory_index AlignmentOffset = 0;
+
+    memory_index ResultPointer = (memory_index)Arena->Base + Arena->Used;
+    memory_index AlignmentMask = Alignment - 1;
+    if (ResultPointer & AlignmentMask) {
+        AlignmentOffset = Alignment - (ResultPointer & AlignmentMask);
+    }
+
+    return (AlignmentOffset);
+}
+
+inline memory_index GetArenaSizeRemaining(memory_arena *Arena, memory_index Alignment = 4) {
+    memory_index Result = Arena->Size - (Arena->Used + GetAlignmentOffset(Arena, Alignment));
+    return (Result);
+}
+
+#define PushStruct(Arena, type, ...) (type *)PushSize_(Arena, sizeof(type), ## __VA_ARGS__)
+#define PushArray(Arena, Count, type, ...) (type *)PushSize_(Arena, (Count) * sizeof(type), ## __VA_ARGS__)
+#define PushSize(Arena, Size, ...) PushSize_(Arena, Size, ## __VA_ARGS__)
+inline void *PushSize_(memory_arena *Arena, memory_index SizeInit, memory_index Alignment = 4) {
+    memory_index Size = SizeInit;
+
+    memory_index AlignmentOffset = GetAlignmentOffset(Arena, Alignment);
+    Size += AlignmentOffset;
+
     Assert((Arena->Used + Size) <= Arena->Size);
-    void *Result = Arena->Base + Arena->Used;
+    void *Result = Arena->Base + Arena->Used + AlignmentOffset;
     Arena->Used += Size;
+
+    Assert(Size >= SizeInit);
 
     return (Result);
 }
@@ -261,6 +309,14 @@ inline void EndTemporaryMemory(temporary_memory TempMem) {
 
 inline void CheckArena(memory_arena *Arena) { Assert(Arena->TempCount == 0); }
 
+inline void SubArena(memory_arena *Result, memory_arena *Arena, memory_index Size,
+                     memory_index Alignment = 16) {
+    Result->Size = Size;
+    Result->Base = (uint8 *)PushSize_(Arena, Size, Alignment);
+    Result->Used = 0;
+    Result->TempCount = 0;
+}
+
 #define ZeroStruct(Instance) ZeroSize(sizeof(Instance), &(Instance))
 inline void ZeroSize(memory_index Size, void *Ptr) {
     // TODO: Check this guy for performance
@@ -279,6 +335,11 @@ inline low_entity *GetLowEntity(game_state *GameState, uint32 Index) {
 
     return (Result);
 }
+
+global_variable platform_add_entry *PlatformAddEntry;
+global_variable platform_complete_all_work *PlatformCompleteAllWork;
+
+internal void LoadAsset(game_assets *Assets, game_asset_id ID);
 
 #define HANDMADE_H
 #endif

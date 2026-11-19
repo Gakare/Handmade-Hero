@@ -19,6 +19,9 @@ typedef int32 bool32;
 typedef float real32;
 typedef double real64;
 
+typedef intptr_t intptr;
+typedef uintptr_t uintptr;
+
 typedef size_t memory_index;
 #define TYPES_H
 #endif

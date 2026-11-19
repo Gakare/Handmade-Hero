@@ -1,10 +1,14 @@
 #if !defined(HANDMADE_MATH_H)
 #include "handmade_intrinsics.h"
 #include "types.h"
+#include <climits>
 
 union v2 {
     struct {
         real32 x, y;
+    };
+    struct {
+        real32 u, v;
     };
     real32 E[2];
 };
@@ -12,6 +16,9 @@ union v2 {
 union v3 {
     struct {
         real32 x, y, z;
+    };
+    struct {
+        real32 u, v, w;
     };
     struct {
         real32 r, g, b;
@@ -23,6 +30,14 @@ union v3 {
     struct {
         real32 Ignored1_;
         v2 yz;
+    };
+    struct {
+        v2 uv;
+        real32 Ignored2_;
+    };
+    struct {
+        real32 Ignored3_;
+        real32 vw;
     };
     real32 E[3];
 };
@@ -47,6 +62,21 @@ union v4 {
         };
 
         real32 a;
+    };
+    struct {
+        v2 xy;
+        real32 Ignored0_;
+        real32 Ignored1_;
+    };
+    struct {
+        real32 Ignored2_;
+        v2 yz;
+        real32 Ignored3_;
+    };
+    struct {
+        real32 Ignored4_;
+        real32 Ignored5_;
+        v2 zw;
     };
     real32 E[4];
 };
@@ -90,6 +120,11 @@ inline v3 V3(real32 X, real32 Y, real32 Z) {
     return (Result);
 }
 
+inline v3 V3i(uint32 X, uint32 Y, uint32 Z) {
+    v3 Result = {(real32)X, (real32)Y, (real32)Z};
+    return (Result);
+}
+
 inline v3 V3(v2 XY, real32 Z) {
     v3 Result;
 
@@ -97,13 +132,6 @@ inline v3 V3(v2 XY, real32 Z) {
     Result.y = XY.y;
     Result.z = Z;
 
-    return (Result);
-}
-
-inline v3 ToV3(v2 XY, real32 Z) {
-    v3 Result;
-    Result.xy = XY;
-    Result.z = Z;
     return (Result);
 }
 
@@ -118,7 +146,7 @@ inline v4 V4(real32 X, real32 Y, real32 Z, real32 W) {
     return (Result);
 }
 
-inline v4 ToV4(v3 XYZ, real32 W) {
+inline v4 V4(v3 XYZ, real32 W) {
     v4 Result;
     Result.xyz = XYZ;
     Result.w = W;
@@ -197,6 +225,15 @@ inline v2 Clamp01(v2 Value) {
     v2 Result;
     Result.x = Clamp01(Value.x);
     Result.y = Clamp01(Value.y);
+    return (Result);
+}
+
+inline real32 Clamp01MapToRange(real32 Min, real32 t, real32 Max) {
+    real32 Result = 0.0f;
+    real32 Range = Max - Min;
+    if (Range != 0.0f) {
+        Result = Clamp01((t - Min) / Range);
+    }
     return (Result);
 }
 
@@ -470,12 +507,19 @@ inline v2 GetMinCorner(rectangle2 Rect) {
     v2 Result = Rect.Min;
     return (Result);
 }
+
 inline v2 GetMaxCorner(rectangle2 Rect) {
     v2 Result = Rect.Max;
     return (Result);
 }
+
 inline v2 GetCenter(rectangle2 Rect) {
     v2 Result = 0.5f * (Rect.Min + Rect.Max);
+    return (Result);
+}
+
+inline v2 GetDim(rectangle2 Rect) {
+    v2 Result = Rect.Max - Rect.Min;
     return (Result);
 }
 
@@ -533,10 +577,17 @@ inline v3 GetMinCorner(rectangle3 Rect) {
     v3 Result = Rect.Min;
     return (Result);
 }
+
 inline v3 GetMaxCorner(rectangle3 Rect) {
     v3 Result = Rect.Max;
     return (Result);
 }
+
+inline v3 GetDim(rectangle3 Rect) {
+    v3 Result = Rect.Max - Rect.Min;
+    return (Result);
+}
+
 inline v3 GetCenter(rectangle3 Rect) {
     v3 Result = 0.5f * (Rect.Min + Rect.Max);
     return (Result);
@@ -617,6 +668,58 @@ inline rectangle2 ToRectangleXY(rectangle3 A) {
     Result.Max = A.Max.xy;
     return (Result);
 }
+
+//
+
+struct rectangle2i {
+    int32 MinX, MinY;
+    int32 MaxX, MaxY;
+};
+
+inline rectangle2i Intersect(rectangle2i A, rectangle2i B) {
+    rectangle2i Result;
+
+    Result.MinX = (A.MinX < B.MinX) ? B.MinX : A.MinX;  
+    Result.MinY = (A.MinY < B.MinY) ? B.MinY : A.MinY;   
+    Result.MaxX = (A.MaxX > B.MaxX) ? B.MaxX : A.MaxX;   
+    Result.MaxY = (A.MaxY > B.MaxY) ? B.MaxY : A.MaxY;   
+
+    return (Result);
+}
+
+inline rectangle2i Union(rectangle2i A, rectangle2i B) {
+    rectangle2i Result;
+
+    Result.MinX = (A.MinX < B.MinX) ? A.MinX : B.MinX; 
+    Result.MinY = (A.MinY < B.MinY) ? A.MinY : B.MinY; 
+    Result.MaxX = (A.MaxX > B.MaxX) ? A.MaxX : B.MaxX; 
+    Result.MaxY = (A.MaxY > B.MaxY) ? A.MaxY : B.MaxY; 
+
+    return (Result);
+}
+
+inline int32 GetClampedRectArea(rectangle2i A) {
+    int32 Width = (A.MaxX - A.MinX);
+    int32 Height = (A.MaxY - A.MinY);
+    int32 Result = 0;
+
+    if ((Width >= 0) && (Height >= 0)) {
+        Result = Width * Height;
+    }
+    return (Result);
+}
+
+inline bool32 HasArea(rectangle2i A) {
+    bool32 Result = ((A.MinX < A.MaxX) && (A.MinY < A.MaxY));
+    return (Result);
+}
+inline rectangle2i InvertedInfinityRectangle(void) {
+    rectangle2i Result;
+    Result.MinX = Result.MinY = INT_MAX;
+    Result.MaxX = Result.MaxY = -INT_MAX;
+    return (Result);
+}
+
 
 #define HANDMADE_MATH_H
 #endif

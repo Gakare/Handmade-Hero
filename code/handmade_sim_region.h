@@ -58,7 +58,6 @@ struct sim_entity_collision_volume_group {
 };
 
 struct sim_entity {
-
     uint32 StorageIndex;
     bool32 Updatable;
 

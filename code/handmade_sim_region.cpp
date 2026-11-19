@@ -99,8 +99,7 @@ internal sim_entity *AddEntity(game_state *GameState, sim_region *SimRegion,
     if (Dest) {
         if (SimP) {
             Dest->P = *SimP;
-            Dest->Updatable = EntityOverlapsRectangle(
-                Dest->P, Dest->Collision->TotalVolume, SimRegion->UpdatableBounds);
+            Dest->Updatable = EntityOverlapsRectangle(Dest->P, Dest->Collision->TotalVolume, SimRegion->UpdatableBounds);
         } else {
             Dest->P = GetSimSpace(SimRegion, Source);
         }
@@ -117,19 +116,23 @@ inline void StoreEntityReference(entity_reference *Reference) {
 
 internal sim_region *BeginSim(memory_arena *SimArena, game_state *GameState, world *World,
                               world_position Origin, rectangle3 Bounds, real32 dt) {
+    // TODO: If entities were stored in the world, we wouldn't need the game state here!
     sim_region *SimRegion = PushStruct(SimArena, sim_region);
     ZeroStruct(SimRegion->Hash);
 
+    // TODO: Try to make these get enforced more rigorously
+    // TODO: Perhaps try using a dual system here, where support entities larger than the
+    // max entity radius by adding them multiple times to the spatial partitions?
     SimRegion->MaxEntityRadius = 5.0f;
     SimRegion->MaxEntityVelocity = 30.0f;
     real32 UpdateSafetyMargin =
         SimRegion->MaxEntityRadius + dt * SimRegion->MaxEntityVelocity;
     real32 UpdateSafetyMarginz = 1.0f;
+
     SimRegion->World = World;
     SimRegion->Origin = Origin;
-    SimRegion->UpdatableBounds =
-        AddRadiusTo(Bounds, V3(SimRegion->MaxEntityRadius, SimRegion->MaxEntityRadius,
-                               SimRegion->MaxEntityRadius));
+    SimRegion->UpdatableBounds = AddRadiusTo(
+        Bounds, V3(SimRegion->MaxEntityRadius, SimRegion->MaxEntityRadius, 0.0f));
     SimRegion->Bounds =
         AddRadiusTo(SimRegion->UpdatableBounds,
                     V3(UpdateSafetyMargin, UpdateSafetyMargin, UpdateSafetyMarginz));
@@ -189,9 +192,8 @@ internal void EndSim(sim_region *Region, game_state *GameState) {
         StoreEntityReference(&Stored->Sim.Sword);
 
         world_position NewP =
-            IsSet(Entity, EntityFlag_NonSpatial)
-                ? NullPosition()
-                : MapIntoChunkSpace(GameState->World, Region->Origin, Entity->P);
+            IsSet(Entity, EntityFlag_NonSpatial) ?
+            NullPosition() : MapIntoChunkSpace(GameState->World, Region->Origin, Entity->P);
         ChangeEntityLocation(&GameState->WorldArena, GameState->World,
                              Entity->StorageIndex, Stored, NewP);
 
@@ -215,15 +217,16 @@ internal void EndSim(sim_region *Region, game_state *GameState) {
                 NewCameraP.ChunkY -= 9;
             }
 #else
-            real32 CamZOffset = NewCameraP.Offset_.z;
+            // real32 CamZOffset = NewCameraP.Offset_.z;
             NewCameraP = Stored->P;
-            NewCameraP.Offset_.z = CamZOffset;
+            // NewCameraP.Offset_.z = CamZOffset;
 #endif
 
             GameState->CameraP = NewCameraP;
         }
     }
 }
+
 struct test_wall {
     real32 X;
     real32 RelX;
@@ -234,7 +237,6 @@ struct test_wall {
     real32 MaxY;
     v3 Normal;
 };
-
 internal bool32 TestWall(real32 WallX, real32 RelX, real32 RelY, real32 PlayerDeltaX,
                          real32 PlayerDeltaY, real32 *tMin, real32 MinY, real32 MaxY) {
     bool32 Hit = false;
@@ -405,7 +407,7 @@ internal void MoveEntity(game_state *GameState, sim_region *SimRegion, sim_entit
     v3 NewPlayerP = OldPlayerP + PlayerDelta;
 
     real32 DistanceRemaining = Entity->DistanceLimit;
-    if (DistanceRemaining == 0.0f) {
+    if (DistanceRemaining <= 0.0f) {
         // TODO: Do we want to formalize this number?
         DistanceRemaining = 10000.0f;
     }
@@ -436,7 +438,7 @@ internal void MoveEntity(game_state *GameState, sim_region *SimRegion, sim_entit
                      ++TestEntityIndex) {
                     sim_entity *TestEntity = SimRegion->Entities + TestEntityIndex;
 
-                    real32 OverlapEpsilon = 0.001f;
+                    real32 OverlapEpsilon = 0.0001f;
 
                     if ((IsSet(TestEntity, EntityFlag_Traversable) &&
                          EntitiesOverlap(Entity, TestEntity,
@@ -455,8 +457,7 @@ internal void MoveEntity(game_state *GameState, sim_region *SimRegion, sim_entit
                                     TestEntity->Collision->Volumes + TestVolumeIndex;
                                 v3 MinkowskiDiameter = {TestVolume->Dim.x + Volume->Dim.x,
                                                         TestVolume->Dim.y + Volume->Dim.y,
-                                                        TestVolume->Dim.z +
-                                                            Volume->Dim.z};
+                                                        TestVolume->Dim.z + Volume->Dim.z};
 
                                 v3 MinCorner = -0.5f * MinkowskiDiameter;
                                 v3 MaxCorner = 0.5f * MinkowskiDiameter;
@@ -528,7 +529,7 @@ internal void MoveEntity(game_state *GameState, sim_region *SimRegion, sim_entit
                                                     (tMinTest > tResult)) {
                                                     if ((Y >= Wall->MinY) &&
                                                         (Y <= Wall->MaxY)) {
-                                                        tMinTest = Maximum(
+                                                        tMinTest = Minimum(
                                                             0.0f, tResult - tEpsilon);
                                                         TestWallNormal = Wall->Normal;
                                                         HitThis = true;
@@ -603,6 +604,7 @@ internal void MoveEntity(game_state *GameState, sim_region *SimRegion, sim_entit
     }
 
     Ground += Entity->P.z - GetEntityGroundPoint(Entity).z;
+
     // TODO: This has to become real height handling / ground collision
     if ((Entity->P.z <= Ground) ||
         (IsSet(Entity, EntityFlag_ZSupported) && (Entity->dP.z == 0.0f))) {

@@ -1,0 +1,28 @@
+// raddbg 0.9.28 project file
+
+recent_file: path: "../code/handmade_render_group.cpp"
+recent_file: path: "../code/win32_handmade.cpp"
+recent_file: path: "../code/handmade.cpp"
+recent_file: path: "../code/handmade_math.h"
+recent_file: path: "../code/handmade_sim_region.cpp"
+target:
+{
+  executable: "../build/win32_handmade.exe"
+  working_directory: "../build"
+}
+target:
+{
+  executable: "../build/win32_handmade.exe"
+  working_directory: "../build"
+}
+watch_pin:
+{
+  expression: Inv255
+  source_location: "../code/handmade_render_group.cpp:464:1"
+}
+target:
+{
+  executable: "../../../../../dev/knite/build/win32_knite.exe"
+  working_directory: "../../../../../dev/knite/build/"
+  enabled: 1
+}
